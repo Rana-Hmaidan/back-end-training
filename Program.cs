@@ -8,7 +8,7 @@ using System.Text;
 
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddDbContext<UserDb>(opt=> opt.UseInMemoryDatabase("UsersList"));
+builder.Services.AddDbContext<UserDb>(opt=> opt.UseInMemoryDatabase("Users"));
 builder.Services.AddDatabaseDeveloperPageExceptionFilter();
 
 builder.Services.AddAuthentication(options =>
