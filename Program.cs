@@ -1,119 +1,172 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
-
+using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Mvc;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddDbContext<UserDb>(opt=> opt.UseInMemoryDatabase("Users"));
-builder.Services.AddDatabaseDeveloperPageExceptionFilter();
-
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
-}).AddJwtBearer(o =>
-{
-    o.TokenValidationParameters = new TokenValidationParameters
-    {
-        ValidIssuer = builder.Configuration["Jwt:Issuer"],
-        ValidAudience = builder.Configuration["Jwt:Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey
-            (Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"])),
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = false,
-        ValidateIssuerSigningKey = true
-    };
-});
-builder.Services.AddAuthorization();
-
 var app = builder.Build();
-app.UseHttpsRedirection();
 
-//list of users 
-app.MapGet("/usersList", async (UserDb db) =>
+//list of users
+List<User> UsersList = new List<User>();
+
+//register users
+app.MapPost("/users", (HttpContext ctx, [FromBody] NewUserRequest body) =>
 {
-    return await db.Users.ToListAsync();
+    //create user 
+    User user = new User
+    {
+        email = body.User.email,
+        password = body.User.password,
+        username = body.User.username,
+        bio = "",
+        image = "",
+        token = Guid.NewGuid().ToString()
+    };
+    //check if user is exist
+    bool exists = UsersList.Exists((u) => u.email == user.email);
+    if (exists)
+    {
+        ctx.Response.StatusCode = 422;
+        return null;
+    }
+    //add new user to UsersList
+    UsersList.Add(user);
+
+    //return response
+    var userResponse = new UserResponse { user = user };
+    ctx.Response.StatusCode = StatusCodes.Status201Created; // `ctx.Response.StatusCode = 201` works as well
+    return userResponse;
 });
 
-//register user 
-app.MapPost("/users", async (User user, UserDb db) => {
-    if( await db.Users.FirstOrDefaultAsync(x => x.Id == user.Id) != null)
+//login users 
+app.MapPost("/users/login", (HttpContext ctx, [FromBody] LoginUserRequest body) =>
+{
+
+    //find user from UsersList by email and password
+    User? user = UsersList.Find((u) => u.email == body.user.email && u.password == body.user.password);
+    if (user == null)
     {
-        return Results.BadRequest();
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return null;
     }
 
-    db.Users.Add(user);
-    await db.SaveChangesAsync();
-    return Results.Created( $"/Users/{user.Id}", user);
+    user.token = Guid.NewGuid().ToString();
+
+    //return response
+    UserResponse userResponse = new UserResponse { user = user };
+
+    return userResponse;
 });
 
-
-//login user
-app.MapPost("/users/login",[AllowAnonymous] (User user) =>
+//Get current user
+app.MapGet("/user", (HttpContext ctx, [FromHeader (Name = "Authorization")] string Token) =>
 {
-    if (user.Email !=null && user.Password !=null)
+    
+//get user with current token 
+    User? user = UsersList.Find((u) => u.token == Token);
+   
+    if (user == null)
     {
-        var issuer = builder.Configuration["Jwt:Issuer"];
-        var audience = builder.Configuration["Jwt:Audience"];
-        var key = Encoding.ASCII.GetBytes
-        (builder.Configuration["Jwt:Key"]);
-        var tokenDescriptor = new SecurityTokenDescriptor
-        {
-            Subject = new ClaimsIdentity(new[]
-            {
-                new Claim("Id", Guid.NewGuid().ToString()),
-                new Claim(JwtRegisteredClaimNames.Sub, user.Email),
-                new Claim(JwtRegisteredClaimNames.Email, user.Email),
-                new Claim(JwtRegisteredClaimNames.Jti,
-                Guid.NewGuid().ToString())
-             }),
-            Expires = DateTime.UtcNow.AddMinutes(5),
-            Issuer = issuer,
-            Audience = audience,
-            SigningCredentials = new SigningCredentials
-            (new SymmetricSecurityKey(key),
-            SecurityAlgorithms.HmacSha512Signature)
-        };
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var token = tokenHandler.CreateToken(tokenDescriptor);
-        var jwtToken = tokenHandler.WriteToken(token);
-        var stringToken = tokenHandler.WriteToken(token);
-        return Results.Ok(stringToken);
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return null;
     }
-    return Results.Unauthorized();
+
+    //return response
+    UserResponse userResponse = new UserResponse { user = user };
+    return userResponse;
+
 });
-app.UseAuthentication();
-app.UseAuthorization();
+
+//update current user informations
+app.MapPut("/user",(HttpContext ctx,[FromHeader (Name = "Authorization")] string Token,[FromBody] UpdateUserRequest body) =>
+{
+    //get user with current token 
+    User? user = UsersList.Find((u) => u.token == Token);
+
+   //check if user with this token is exists 
+    if (user == null)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        return null;
+    }
+
+//update user info
+if(body.user.email == null) body.user.email = user.email;
+if(body.user.password == null) body.user.password = user.password ;
+if(body.user.username == null) body.user.username = user.username;
+if(body.user.bio == null) body.user.bio = user.bio;
+if(body.user.image == null) body.user.image = user.image;
+  
+   user = new User
+     {
+        email = body.user.email,
+        password = body.user.password,
+        username = body.user.username,
+        bio = body.user.bio,
+        image = body.user.image,
+        token = Token
+    };
+
+     //return response 
+    var userResponse = new UserResponse { user = user };
+    ctx.Response.StatusCode = StatusCodes.Status201Created;
+    return userResponse;
+
+});
+
+app.Run();   //run the app
 
 
-app.Run();  //run the app
+public class NewUser
+{
+    public string username { get; set; }
+    public string email { get; set; }
+    public string password { get; set; }
+}
 
+public class NewUserRequest
+{
+    public NewUser User { get; set; }
+}
 
 public class User
 {
-    public int Id { get; set; }
-    public string? Email { get; set; }
-    public string? Password { get; set; }
-    public string? UserName { get; set; }
-    
+    public string email { get; set; }
+    [JsonIgnore]
+    public string password { get; set; }
+    public string username { get; set; }
+    public string bio { get; set; }
+    public string image { get; set; }
+    public string token { get; set; }
 }
 
-class UserDb : DbContext
+public class UserResponse
 {
-    
-    public UserDb(DbContextOptions<UserDb> options)
-        : base(options) { }
+    public User user { get; set; }
+}
 
-
-    public DbSet<User> Users{ get; set; }
-
-    //public DbSet<User> Users => Set<User>();
+public class LoginUserRequest
+{
+    public LoginUser user { get; set; }
 
 }
 
+public class LoginUser
+{
+    public string email { get; set; }
+    public string password { get; set; }
+}
+
+public class UpdateUserRequest
+{
+    public UpdateUser user { get; set; }
+}
+
+public class UpdateUser
+{
+    public string email { get; set; }
+    [JsonIgnore]
+    public string password { get; set; }
+    public string username { get; set; }
+    public string bio { get; set; }
+    public string image { get; set; }
+    public string token { get; set; }
+}
